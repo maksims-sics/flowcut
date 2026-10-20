@@ -2,6 +2,7 @@
 // Finding and running the external tools (ffmpeg, ffprobe, python).
 // Plain Node, no Electron imports: the engine also runs from tests and the command line.
 const { spawn } = require('node:child_process');
+const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -63,10 +64,12 @@ function eachLine(stream, cb) {
  * Runs a tool. Resolves with { stdout, stderrTail } (stdout only when capture is on),
  * rejects with ToolError or CancelledError (when `signal` aborts, the process is killed).
  */
-function run(exe, args, { signal, onStdoutLine, onStderrLine, capture = false, cwd } = {}) {
+function run(exe, args, { signal, onStdoutLine, onStderrLine, capture = false, cwd, lowPriority = false } = {}) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new CancelledError());
     const child = spawn(exe, args, { cwd, windowsHide: true });
+    // background work (the fast copy) yields the CPU to playback in the window
+    if (lowPriority && child.pid) { try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* not allowed: normal */ } }
     const out = [];
     let stderrTail = '';
     if (capture) child.stdout.on('data', (d) => out.push(d));

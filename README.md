@@ -14,8 +14,8 @@ Electron and plain JavaScript (no build step), Python only for the Whisper trans
   around speech. No sliders: every pause is proposed as a cut and you decide.
 - **Filler words** from a Whisper transcript: sounds (um, uh, hmm) always, words (so, like, actually, you know) only when
   they stand alone, so "So, today..." is cut and "it's so good" is not.
-- **Review at 1× 2× 4× 6×**, always at the recording's own resolution. "Preview result" skips the cuts; put the playhead
-  inside a cut to hear exactly what was cut without bringing it back.
+- **Review at 1× 2× 4× 6×**, always at the recording's own resolution and without stutter: "Preview result" jumps
+  over the cuts instantly. Put the playhead inside a cut to hear exactly what was cut without bringing it back.
 - **Split and toggle**: `S` splits the recording at the playhead, and every piece has a bar at the top of the timeline:
   click it to cut the piece or bring it back.
 - **Words on the timeline** (the word being spoken lights up) and **words on the video** like subtitles, so you can
@@ -28,8 +28,8 @@ Electron and plain JavaScript (no build step), Python only for the Whisper trans
 
 - Windows 10 or 11 (FlowCut is developed and tested there).
 - [Node.js](https://nodejs.org) 20 or newer.
-- [ffmpeg](https://ffmpeg.org) and ffprobe on the PATH. An NVIDIA GPU makes renders and the fast copy much quicker
-  (AV1 NVENC, used for the fast copy, needs an RTX 40-series card; other cards get H.264).
+- [ffmpeg](https://ffmpeg.org) and ffprobe on the PATH. An NVIDIA GPU makes renders and the fast copies much quicker
+  (AV1 NVENC, used for the fast copies, needs an RTX 40-series card; other cards get H.264).
 - Optional: Python and Whisper for the transcript, filler words and words on the video (next section).
 
 ### Transcript and filler words (optional)
@@ -117,14 +117,32 @@ after, or at the start of a sentence. Each cut edge moves into the quietest 40 m
 normally drops "um" and "uh"; FlowCut primes it to write them (English). On a 24-minute screen recording that gave 14
 filler cuts, while 56 "so" and 50 "actually" inside sentences stayed.
 
-### Why 4× and 6× use a fast copy
+### Why 4× and 6× use fast copies
 
 The editor window decodes about 100 video frames a second, whatever the resolution. 6× of a 30 fps recording needs 180,
-so the original froze for about 2 s every few seconds (about 3.6× on average). The first time you pick 4× or 6×,
-FlowCut makes a **fast copy** with the same resolution but 10 frames a second: 6× then needs 60, which is all a 60 Hz
-screen shows anyway. The copy is on screen only while playing at 4× or 6×; stop or slow down and the original is back
-on the same frame. On a 24-minute 1440p recording it took 92 s to make and played at 5.97×. The three newest fast copies
-are kept (about 18 MB per minute each).
+so the original froze for about 2 s every few seconds (about 3.6× on average). As soon as a recording opens, FlowCut
+makes two **fast copies** in one pass, in the background (low priority), with the same resolution and fewer frames: 15
+a second for 4× and 10 for 6×, so each speed shows exactly 60 new frames a second, one per refresh of a 60 Hz screen.
+A frame rate that does not fit judders: 10 frames a second at 4× (40 a second) reached the screen as about 20, and 15
+at 6× (90 a second, near what the window decodes) fell to 30 after a while. The copies are on screen only while playing
+at 4× or 6×; stop or slow down and the original is back on the same frame. On a 24-minute 3840×1440 recording both took
+about 2 minutes to make, and 4× and 6× then showed 58 to 59 frames a second for 40 s at a time with no stall; a 4K
+talking head the same. The copies of the three newest recordings are kept (about 20 + 18 MB per minute); a single copy
+from an older version is made again.
+
+### Why jumping over a cut is instant
+
+Screen recorders put a keyframe every few seconds (OBS: 8 s at 30 fps), and a seek decodes from the keyframe before the
+target, so a plain seek over a cut froze the picture for 0.3 to 0.9 s, more often the faster you played. Each source
+therefore plays from a deck of three stacked video elements: one is on screen, the other two wait, paused, already on
+the first frame after each of the next two cuts. At a cut the next one takes over, which costs one frame. Two waiting
+elements give each of them the time of two kept pieces to get ready, so the short pieces between filler words work too;
+one that is still getting ready is waited for on the last frame (shorter than a new seek). Paused, they get ready a
+moment after the playhead stops moving, so play is instant as well.
+
+The timeline is drawn every frame while playing, on the same GPU process that shows the video. With thousands of words in
+view (a long stretch zoomed out) it drew one box per word and starved the video (2× fell to 1.2×), so the words lane now
+draws batched paths, and when the words are too dense to read it shows only the word being spoken, at the playhead.
 
 ### Quality
 
@@ -145,7 +163,7 @@ x264 CRF 12 slow, about 14× faster), with the colour tags copied from the sourc
 | What | Where |
 |---|---|
 | App settings, recent files | `%APPDATA%\FlowCut\settings.json`, `recent.json` |
-| Per recording: edits, splits, louder moments, levels, transcript, fast copy, review copy | `%APPDATA%\FlowCut\projects\<id>\` (id = path + size + date) |
+| Per recording: edits, splits, louder moments, levels, transcript, fast copies, review copy | `%APPDATA%\FlowCut\projects\<id>\` (id = path + size + date) |
 | Rendered videos | next to the recording, or the folder chosen under Render |
 
 ## How it works
@@ -191,12 +209,12 @@ x264 CRF 12 slow, about 14× faster), with the colour tags copied from the sourc
 | `src/engine/gains.js` | louder moments -> non-overlapping ranges |
 | `src/engine/render.js` | one-encode render: `select` for frames, PCM cut with join fades and gains for sound, quality presets |
 | `src/engine/transcribe.js`, `python/transcribe_worker.py` | Whisper word timestamps (a verbatim prompt keeps um / uh) |
-| `src/engine/proxy.js` | fast copy (same size, 10 fps, for 4× / 6×) and review copy (same size, for files the window cannot play) |
+| `src/engine/proxy.js` | fast copies (same size, 15 fps for 4× and 10 fps for 6×, one pass at low priority) and review copy (same size, for files the window cannot play) |
 | `src/renderer/js/app.js` | page controller: state, keys, jobs, buttons |
 | `src/renderer/js/timeline.js` | the canvas: piece bars, splits, waveform, cuts, fillers, louder, words, zoom, sliding, following the playhead |
 | `src/renderer/js/pieces.js` | pieces = engine segments split again at your splits and edit edges |
 | `src/renderer/js/captions.js` | words on the video: the phrase being spoken, the current word lit, cut words struck through |
-| `src/renderer/js/player.js` | the original + fast copy elements, speeds, preview skipping (and playing a cut you chose), louder-moment gain (Web Audio) |
+| `src/renderer/js/player.js` | a deck of elements for the original (three) and for each fast copy (two), which copy each speed plays, preview jumping over cuts by switching to an element parked after them (and playing a cut you chose), louder-moment gain (Web Audio) |
 | `src/renderer/js/review.js` | the Review list |
 | `src/renderer/js/edits.js` | undo / redo over edits, louder moments and splits |
 | `src/renderer/js/shortcuts.js` | keyboard table (also the help screen) |
@@ -217,14 +235,14 @@ x264 CRF 12 slow, about 14× faster), with the colour tags copied from the sourc
 | `saveProject(id, {edits, gainEdits, splits})` | `project:save` | |
 | `transcribe(id, {language, vocabulary})` / `transcript(id)` | `transcribe:start` / `transcript:get` | job id / words |
 | `render(id, {edits, gainEdits, render: {format, quality}})` | `render:start` | job id; result `{outPath, frames, seconds, pieces, encoder, gains}` |
-| `makeFast(id)` / `makeProxy(id)` | `fast:make` / `proxy:make` | job id; result `{projectId, fastUrl}` / `{projectId, mediaUrl}` |
+| `makeFast(id)` / `makeProxy(id)` | `fast:make` / `proxy:make` | job id; result `{projectId, fastCopies: [{fps, url}]}` / `{projectId, mediaUrl}` |
 | `cancelJob(jobId)`, `reveal(path)`, `openPath(path)`, `recent()`, `pickVideo()`, `chooseFolder()` | | |
 | `onJob(cb)`, `onOpenFile(cb)` | events | unsubscribe function |
 
 ## Adding a feature
 
 Run the checks after every change: `npm test` and `npm run e2e` (and `npm run quality -- "<a recording>"` when
-touching the render).
+touching the render, `npm run smooth -- --file "<a recording>"` when touching playback or the timeline).
 
 **A new automatic cut** (example: repeated phrases and retakes from the transcript): write a finder like
 `src/engine/fillers.js` that returns `[{start, end, text}]`, overlay it in `computeCuts` next to `applyFillers` with its
@@ -244,14 +262,17 @@ Good next features: retake suggestions, exports for other editors, batch process
 | Command | What it proves |
 |---|---|
 | `npm test` | silence rules, filler rules, louder ranges, edits, frame ranges, render expression |
-| `npm run e2e` | the real app on generated clips: speeds and the fast copy (same size, 10 fps, original back on stop), the whole frame fits the stage, `S` splits without cutting, a click on a piece's bar cuts it and another brings it back, `Del` / `K` / `O` on the piece under the playhead, double-click, dragging slides (no selection), `V` louder on a piece (+3 dB measured in the render), review rows and clicks play the cut, preview skips the rest, the playhead stays in the middle, words on the video, MP4 + MOV renders, 4K stays 4K, an unplayable 4K MKV gets a same-size copy. `-- --file "<recording>" --transcribe` adds a real file and Whisper. Screenshots go to `test/artifacts/` |
+| `npm run e2e` | the real app on generated clips: speeds and the fast copies (same size, 15 and 10 fps, made on open, 4× and 6× each on its own, original back on stop), the whole frame fits the stage, `S` splits without cutting, a click on a piece's bar cuts it and another brings it back, `Del` / `K` / `O` on the piece under the playhead, double-click, dragging slides (no selection), `V` louder on a piece (+3 dB measured in the render), review rows and clicks play the cut, preview skips the rest by switching to an element already waiting after the cut, the playhead stays in the middle, words on the video, MP4 + MOV renders, 4K stays 4K, an unplayable 4K MKV gets a same-size copy. `-- --file "<recording>" --transcribe` adds a real file and Whisper. Screenshots go to `test/artifacts/` |
 | `npm run quality -- <file> [--format mov]` | renders like the app and scores picture (VMAF / PSNR / SSIM) and sound (SNR) against the source |
+| `npm run smooth -- --file <file> [--rates 1,2,4,6] [--seconds 20] [--span 30] [--wait-fast]` | plays a real recording in the real app with preview on and measures what reaches the screen: frames per second, stalls (no new frame for 150 ms), real speed, every jump over a cut (switched, waited or seeked) and the timeline's drawing time. `--project <folder>` copies an existing project in (no new analysis) |
 
 ## Known limits
 
 - FlowCut cuts; there is no fast-forward or transition mode.
-- 4× and 6× wait for the fast copy the first time (about 1.5 min for 24 minutes of 1440p); until then they play the
-  original, which freezes now and then.
+- Right after a recording opens, 4× and 6× play the original until the fast copies are made (about 2 minutes for 24
+  minutes of 3840×1440), and the original freezes now and then at those speeds.
+- The fast copies are tuned for 60 Hz screens; on faster screens 4× and 6× are just as smooth, they only show 60 new
+  frames a second.
 - Audio is analysed in 45-minute chunks; tested on recordings of up to 24 minutes.
 - Audio-only files: the analysis works, the render needs a video stream.
 - Filler words need Python and faster-whisper; the prompt that keeps um / uh is English only.

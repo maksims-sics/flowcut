@@ -12,7 +12,7 @@ const { findFillers, parseList, DEFAULT_LIST } = require('../engine/fillers');
 const { resolveGains } = require('../engine/gains');
 const { render } = require('../engine/render');
 const { transcribe, whisperStatus } = require('../engine/transcribe');
-const { makeProxy, makeFastCopy } = require('../engine/proxy');
+const { makeProxy, makeFastCopies, FAST_COPIES } = require('../engine/proxy');
 const { Jobs } = require('./jobs');
 
 const VIDEO_EXTENSIONS = ['mp4', 'mov', 'mkv', 'm4v', 'webm', 'avi', 'ts'];
@@ -61,14 +61,36 @@ function registerIpc({ getWindow, store, startupFile }) {
   };
   // the editor shows the original; only a file the window cannot play at all is shown through its review copy
   const mediaPath = (project) => (project.proxy && fs.existsSync(project.proxy) ? project.proxy : project.source.path);
-  const fastPath = (project) => (project.fast && fs.existsSync(project.fast) ? project.fast : null);
-  /** Copies made before v3 were 1080p and stood in for the original at 4x / 6x: they are dropped. */
+  /** The fast copies as [{ fps, url }], or null until all of them are there. */
+  const fastCopies = (project) => {
+    const f = project.fast;
+    if (!f || typeof f !== 'object' || !FAST_COPIES.every((c) => f[c.fps] && fs.existsSync(f[c.fps]))) return null;
+    return FAST_COPIES.map((c) => ({ fps: c.fps, url: pathToFileURL(f[c.fps]).href }));
+  };
+  /**
+   * Copies made before v3 were 1080p and stood in for the original at 4x / 6x: they are dropped. So is a single fast
+   * copy from before (one frame rate for both speeds juddered at one of them), an incomplete set, and what a cancelled
+   * copy left behind.
+   */
   const dropOldCopies = (id, project) => {
     if (project.proxy && project.proxyRes !== 'source') delete project.proxy;
     if (!project.proxy && !jobs.isBusy('proxy')) {
       try { fs.rmSync(store.proxyFile(id), { force: true }); } catch { /* still open somewhere: next time */ }
     }
-    if (project.fast && !fs.existsSync(project.fast)) delete project.fast;
+    if (project.fast && !fastCopies(project)) {
+      const files = typeof project.fast === 'string' ? [project.fast] : Object.values(project.fast);
+      for (const f of files) { try { fs.rmSync(f, { force: true }); } catch { /* still open somewhere: next time */ } }
+      delete project.fast;
+    }
+    delete project.fastFps;
+    if (!jobs.isBusy('fast')) {
+      const dir = store.projectDir(id);
+      for (const f of fs.readdirSync(dir)) {
+        if (/^fast\d*(\.partial)?\.mp4$/i.test(f) && (/partial/i.test(f) || !project.fast)) {
+          try { fs.rmSync(path.join(dir, f), { force: true }); } catch { /* next time */ }
+        }
+      }
+    }
   };
   const readWords = (id) => {
     const f = store.transcriptFile(id);
@@ -82,7 +104,7 @@ function registerIpc({ getWindow, store, startupFile }) {
       path: project.source.path,
       mediaUrl: pathToFileURL(mediaPath(project)).href,
       usingProxy: mediaPath(project) !== project.source.path,
-      fastUrl: fastPath(project) ? pathToFileURL(fastPath(project)).href : null,
+      fastCopies: fastCopies(project),
       info: project.info,
       analysis: project.analysis,
       edits: project.edits || [],
@@ -255,12 +277,14 @@ function registerIpc({ getWindow, store, startupFile }) {
     const { project } = need(id);
     if (jobs.isBusy('fast')) return null;
     return jobs.start('fast', path.basename(project.source.path), async ({ signal, progress, status }) => {
-      status('Making the fast copy');
-      const file = await makeFastCopy(project.source.path, project.info, store.fastFile(id), tools, { signal, onProgress: progress });
-      need(id).project.fast = file;
+      status('Making the fast copies');
+      const outs = FAST_COPIES.map((c) => ({ fps: c.fps, path: store.fastFile(id, c.fps) }));
+      await makeFastCopies(project.source.path, project.info, outs, tools, { signal, onProgress: progress });
+      const p = need(id).project;
+      p.fast = Object.fromEntries(outs.map((o) => [o.fps, o.path]));
       saveProject(id);
       store.pruneFastCopies(3);
-      return { projectId: id, fastUrl: pathToFileURL(file).href };
+      return { projectId: id, fastCopies: fastCopies(p) };
     });
   });
   handle('job:cancel', (jobId) => jobs.cancel(jobId));

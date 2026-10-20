@@ -6,7 +6,7 @@
 //   projects/<id>/levels.f64     40 ms loudness windows (Float64, little endian)
 //   projects/<id>/transcript.json
 //   projects/<id>/proxy.mp4      review copy of a file the window cannot play (same size)
-//   projects/<id>/fast.mp4       fast copy for smooth 4x / 6x (same size, 10 frames a second)
+//   projects/<id>/fast15.mp4, fast10.mp4   fast copies for smooth 4x / 6x (same size, 15 / 10 frames a second)
 // A project id is derived from path + size + modification time, so a changed file is analysed again.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -80,18 +80,21 @@ class Store {
 
   transcriptFile(id) { return path.join(this.projectDir(id), 'transcript.json'); }
   proxyFile(id) { return path.join(this.projectDir(id), 'proxy.mp4'); }
-  fastFile(id) { return path.join(this.projectDir(id), 'fast.mp4'); }
+  fastFile(id, fps) { return path.join(this.projectDir(id), `fast${fps}.mp4`); }
 
-  /** Fast copies take ~20 MB per minute: only the `keep` newest stay (they are remade on demand). */
+  /** Fast copies take ~40 MB per minute together: only those of the `keep` newest recordings stay (they are remade). */
   pruneFastCopies(keep = 3) {
     const root = path.join(this.root, 'projects');
-    let files = [];
+    let sets = [];
     try {
-      files = fs.readdirSync(root).map((id) => path.join(root, id, 'fast.mp4')).filter((f) => fs.existsSync(f))
-        .map((f) => ({ f, t: fs.statSync(f).mtimeMs })).sort((a, b) => b.t - a.t);
+      sets = fs.readdirSync(root).map((id) => {
+        const dir = path.join(root, id);
+        const files = fs.readdirSync(dir).filter((f) => /^fast\d*\.mp4$/i.test(f)).map((f) => path.join(dir, f));
+        return { files, t: Math.max(0, ...files.map((f) => fs.statSync(f).mtimeMs)) };
+      }).filter((x) => x.files.length).sort((a, b) => b.t - a.t);
     } catch { return; }
-    for (const { f } of files.slice(keep)) {
-      try { fs.rmSync(f, { force: true }); } catch { /* in use: next time */ }
+    for (const { files } of sets.slice(keep)) {
+      for (const f of files) { try { fs.rmSync(f, { force: true }); } catch { /* in use: next time */ } }
     }
   }
 }

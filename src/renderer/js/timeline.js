@@ -13,6 +13,7 @@ const RULER_H = 24;
 const BAR_H = 15;           // the piece bar under the ruler
 const WORDS_H = 40;         // one row of words, or two staggered rows when they are tight
 const OVERVIEW_H = 12;
+const WORD_MIN_PX = 6;       // fewer pixels a word than this in view: too dense to read, no word boxes
 const DRAG_PX = 4;          // movement that turns a click into a slide of the view
 const FOLLOW_HOLD_MS = 1500;// after sliding the view by hand while playing, following waits this long
 const GLIDE_S = 0.18;       // how fast the view eases the playhead back to the middle
@@ -33,6 +34,8 @@ const BAR = {               // piece bar colours: kept, and cut by reason
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const amp = (db) => (db <= DB_FLOOR ? 0 : Math.min(1, (db - DB_FLOOR) / -DB_FLOOR));
 const barKind = (p) => (p.keep ? 'keep' : p.manual ? 'yours' : p.reason === 'filler' ? 'filler' : 'silence');
+/** A rounded box added to a batch path (one fill for many boxes). */
+const roundRectPath = (path, x, y, w, h, r) => path.roundRect(x, y, Math.max(0, w), Math.max(0, h), Math.max(0, Math.min(r, Math.abs(w) / 2, h / 2)));
 
 export class Timeline {
   /** handlers: onSeek(t), onToggleAt(t), onTogglePiece(piece), onView(view) */
@@ -474,6 +477,9 @@ export class Timeline {
   /**
    * Words under the waveform; the one being spoken lights up, cut ones are struck through. When one row has no room
    * for most of them, they alternate between two rows, so each word may use the space up to the word after next.
+   * Too many words to read (a long stretch in view): no boxes, only the word being spoken at the playhead. Drawing
+   * thousands of boxes 60 times a second keeps the GPU from showing the video in time, so playback stutters.
+   * Boxes are batched by kind into a few paths and the text is drawn per colour, which keeps the canvas cheap.
    */
   drawWords({ words }) {
     const { ctx } = this;
@@ -488,6 +494,8 @@ export class Timeline {
     const i0 = wordIndexAfter(ws, this.view.start);
     let i1 = i0;
     while (i1 < ws.length && ws[i1].s < this.view.end) i1++;
+    const now = this.wordAt(this.time);
+    if ((i1 - i0) * WORD_MIN_PX > this.W) { this.drawWordsDense(words, now); return; }
     let tight = 0;
     for (let i = i0; i < i1; i++) {
       const next = i + 1 < ws.length ? this.x(ws[i + 1].s) : this.W;
@@ -495,7 +503,11 @@ export class Timeline {
     }
     const rowsN = i1 > i0 && tight / (i1 - i0) > 0.15 ? 2 : 1;
     const rowH = rowsN === 2 ? (words.h - 6) / 2 : words.h - 10;
-    const now = this.wordAt(this.time);
+    const font = rowsN === 2 ? FONT_2 : FONT;
+    const fontNow = rowsN === 2 ? FONT_2_NOW : FONT_NOW;
+    const boxes = { plain: new Path2D(), cut: new Path2D(), filler: new Path2D() };
+    const texts = { plain: [], cut: [], filler: [] };
+    let nowItem = null;
     for (let i = i0; i < i1; i++) {
       const w = ws[i];
       const row = rowsN === 2 ? i % 2 : 0;
@@ -506,36 +518,99 @@ export class Timeline {
       const next = i + rowsN < ws.length ? this.x(ws[i + rowsN].s) : this.W;   // next word in the same row
       const seg = this.segmentAt((w.s + w.e) / 2);
       const isCut = seg ? !seg.keep : false;
-      const isFiller = isCut && seg.reason === 'filler' && !seg.manual;
+      const kind = isCut ? (seg.reason === 'filler' && !seg.manual ? 'filler' : 'cut') : 'plain';
       const isNow = w === now && this.time < w.e;
-      ctx.fillStyle = isNow ? 'oklch(0.86 0.09 205 / 0.32)'
-        : isFiller ? 'oklch(0.72 0.15 300 / 0.16)' : isCut ? 'oklch(1 0 0 / 0.02)' : 'oklch(1 0 0 / 0.06)';
-      this.roundRect(x0, y, x1 - x0, rowH, 5);
-      ctx.fill();
-      if (isNow) {
-        ctx.strokeStyle = 'oklch(0.86 0.09 205 / 0.8)';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      }
-      const font = rowsN === 2 ? (isNow ? FONT_2_NOW : FONT_2) : (isNow ? FONT_NOW : FONT);
       const room = Math.min(Math.max(x1, next) - x0, 400) - 6;
-      if (room < 12) continue;
-      let text = w.w;
-      let width = this.textWidth(text, font);
-      if (width > room) {
-        const keep = Math.floor((text.length * room) / width) - 1;
-        if (keep < 3) continue;                 // a "t…" fragment says nothing; zoom in to read it
-        text = `${text.slice(0, keep)}…`;
-        width = this.textWidth(text, font);
-      }
-      ctx.font = font;
-      ctx.fillStyle = isNow ? 'oklch(0.98 0.01 205)' : isFiller ? this.c.filler : isCut ? this.c.text3 : this.c.text;
-      ctx.fillText(text, x0 + 4, mid + 0.5);
-      if (isCut) {
-        ctx.fillStyle = isFiller ? this.c.filler : this.c.cut;
-        ctx.fillRect(x0 + 3, Math.round(mid), width + 2, 1);
+      const item = { w, x0, x1, y, mid, room, kind };
+      if (isNow) { nowItem = item; continue; }
+      roundRectPath(boxes[kind], x0, y, x1 - x0, rowH, 5);
+      if (room >= 12) texts[kind].push(item);
+    }
+    ctx.fillStyle = 'oklch(1 0 0 / 0.06)';
+    ctx.fill(boxes.plain);
+    ctx.fillStyle = 'oklch(1 0 0 / 0.02)';
+    ctx.fill(boxes.cut);
+    ctx.fillStyle = 'oklch(0.72 0.15 300 / 0.16)';
+    ctx.fill(boxes.filler);
+    ctx.font = font;
+    const strikes = { cut: new Path2D(), filler: new Path2D() };
+    for (const kind of ['plain', 'cut', 'filler']) {
+      ctx.fillStyle = kind === 'filler' ? this.c.filler : kind === 'cut' ? this.c.text3 : this.c.text;
+      for (const it of texts[kind]) {
+        const fit = this.fitText(it.w.w, font, it.room);
+        if (!fit) continue;
+        ctx.fillText(fit.text, it.x0 + 4, it.mid + 0.5);
+        if (kind !== 'plain') strikes[kind].rect(it.x0 + 3, Math.round(it.mid), fit.width + 2, 1);
       }
     }
+    ctx.fillStyle = this.c.cut;
+    ctx.fill(strikes.cut);
+    ctx.fillStyle = this.c.filler;
+    ctx.fill(strikes.filler);
+    if (nowItem) {                                       // the word being spoken, on top
+      const it = nowItem;
+      ctx.fillStyle = 'oklch(0.86 0.09 205 / 0.32)';
+      this.roundRect(it.x0, it.y, it.x1 - it.x0, rowH, 5);
+      ctx.fill();
+      ctx.strokeStyle = 'oklch(0.86 0.09 205 / 0.8)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      const fit = it.room >= 12 ? this.fitText(it.w.w, fontNow, it.room) : null;
+      if (fit && fit.text === it.w.w) {
+        ctx.font = fontNow;
+        ctx.fillStyle = 'oklch(0.98 0.01 205)';
+        ctx.fillText(fit.text, it.x0 + 4, it.mid + 0.5);
+        if (it.kind !== 'plain') {
+          ctx.fillStyle = it.kind === 'filler' ? this.c.filler : this.c.cut;
+          ctx.fillRect(it.x0 + 3, Math.round(it.mid), fit.width + 2, 1);
+        }
+      } else {
+        this.drawNowLabel(words, it.w);              // no room for the whole word: a label at the playhead
+      }
+    }
+  }
+
+  /** A long stretch in view: the word being spoken in a label at the playhead, and how to see them all. */
+  drawWordsDense(words, now) {
+    const { ctx } = this;
+    const px = this.x(this.time);
+    ctx.font = FONT_SMALL;
+    const hint = 'Zoom in to read the words (Ctrl + wheel)';
+    const hw = this.textWidth(hint, FONT_SMALL);
+    if (px < 12 || px > hw + 36) {
+      ctx.fillStyle = this.c.text3;
+      ctx.fillText(hint, 12, words.y + words.h / 2);
+    }
+    if (now && this.time < now.e) this.drawNowLabel(words, now);
+  }
+
+  /** The word being spoken, whole, in a label just right of the playhead. */
+  drawNowLabel(words, now) {
+    const { ctx } = this;
+    const mid = words.y + words.h / 2;
+    ctx.font = FONT_NOW;
+    const tw = this.textWidth(now.w, FONT_NOW);
+    const x = clamp(this.x(this.time) + 6, 2, this.W - tw - 14);
+    ctx.fillStyle = 'oklch(0.32 0.06 205 / 0.96)';
+    this.roundRect(x, words.y + 5, tw + 10, words.h - 10, 5);
+    ctx.fill();
+    ctx.strokeStyle = 'oklch(0.86 0.09 205 / 0.8)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = 'oklch(0.98 0.01 205)';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(now.w, x + 5, mid + 0.5);
+  }
+
+  /** The text that fits in `room` px (cut with an ellipsis), or null when even a short fragment does not fit. */
+  fitText(text, font, room) {
+    let width = this.textWidth(text, font);
+    if (width <= room) return { text, width };
+    const keep = Math.floor((text.length * room) / width) - 1;
+    if (keep < 3) return null;                 // a "t…" fragment says nothing; zoom in to read it
+    const cut = `${text.slice(0, keep)}…`;
+    width = this.textWidth(cut, font);
+    return { text: cut, width };
   }
 
   textWidth(text, font) {

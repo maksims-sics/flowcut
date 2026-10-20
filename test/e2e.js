@@ -110,31 +110,43 @@ async function main() {
   check(rows === 4, 'review list shows every cut', `${rows} rows`);
   await page.screenshot({ path: path.join(OUT, '1-editor.png') });
 
-  // speeds; 6x makes the fast copy (same size, 10 frames a second) and plays it, stopping shows the original again
+  // speeds; opening started the fast copies (same size, 15 frames a second for 4x, 10 for 6x: 60 new frames a second
+  // each); 6x plays the 10 one, 4x the 15 one, stopping shows the original again
   await page.keyboard.press('2');
   const rate = await state(page, () => window.__flowcut.player.rate);
   await page.click('#speeds button[data-rate="6"]');
   const rate6 = await state(page, () => window.__flowcut.player.rate);
   check(rate === 2 && rate6 === 6, 'speeds 2× (key) and 6× (button) set the playback rate');
-  const fastUrl = await page.waitForFunction(() => window.__flowcut.S.project.fastUrl, null, { timeout: 90000 }).then((h) => h.jsonValue()).catch(() => null);
-  if (fastUrl) {
-    const v = probeStreams(fileURLToPath(fastUrl)).find((s) => s.codec_type === 'video');
-    check(v.width === 1280 && v.height === 720 && v.avg_frame_rate === '10/1', '6× made the fast copy: same size, 10 frames a second', `${v.width}x${v.height} ${v.codec_name} ${v.avg_frame_rate}`);
-    await page.waitForFunction(() => window.__flowcut.player.fastReady, null, { timeout: 10000 });
+  const copies = await page.waitForFunction(() => window.__flowcut.S.project.fastCopies, null, { timeout: 90000 }).then((h) => h.jsonValue()).catch(() => null);
+  if (copies) {
+    const got = copies.map((c) => {
+      const v = probeStreams(fileURLToPath(c.url)).find((s) => s.codec_type === 'video');
+      return `${v.width}x${v.height} ${v.codec_name} ${v.avg_frame_rate}`;
+    });
+    check(got.length === 2 && got[0].startsWith('1280x720') && got[1].startsWith('1280x720') && got.some((g) => g.endsWith(' 15/1')) && got.some((g) => g.endsWith(' 10/1')),
+      'the fast copies are there: same size, 15 and 10 frames a second', got.join(', '));
+    await page.waitForFunction(() => window.__flowcut.player.fastDecks.every((d) => d.ready), null, { timeout: 10000 });
     await seek(page, 4.3);
     await page.keyboard.press('Space');
     await page.waitForTimeout(500);
-    const playingFast = await state(page, () => ({ fast: window.__flowcut.player.showingFast, shown: !document.querySelector('#videoFast').classList.contains('is-off'), t: window.__flowcut.player.time }));
+    const playingFast = await state(page, () => ({ fast: window.__flowcut.player.showingFast, fps: window.__flowcut.player.deckOf(window.__flowcut.player.v).fps, shown: !window.__flowcut.player.v.classList.contains('is-off'), t: window.__flowcut.player.time }));
     await page.keyboard.press('Space');
-    await page.waitForFunction(() => !document.querySelector('#video').classList.contains('is-off'), null, { timeout: 3000 }).catch(() => {});
+    await page.waitForFunction(() => !window.__flowcut.player.showingFast && !window.__flowcut.player.v.classList.contains('is-off'), null, { timeout: 3000 }).catch(() => {});
     const stopped = await state(page, () => {
-      const m = document.querySelector('#video');
+      const m = window.__flowcut.player.v;
       return { fast: window.__flowcut.player.showingFast, shown: !m.classList.contains('is-off'), t: m.currentTime, playing: window.__flowcut.player.playing };
     });
-    check(playingFast.fast && playingFast.shown && playingFast.t > 5.5, 'playing at 6× shows the fast copy', `at ${playingFast.t.toFixed(2)} s`);
+    check(playingFast.fast && playingFast.fps === 10 && playingFast.shown && playingFast.t > 5.5, 'playing at 6× shows the 10 frames a second copy', `at ${playingFast.t.toFixed(2)} s, ${playingFast.fps} fps`);
     check(!stopped.fast && stopped.shown && !stopped.playing, 'stopping shows the original again, on the same moment', `original at ${stopped.t.toFixed(2)} s`);
+    await page.keyboard.press('4');
+    await seek(page, 1.2);
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(400);
+    const at4 = await state(page, () => ({ fast: window.__flowcut.player.showingFast, fps: window.__flowcut.player.deckOf(window.__flowcut.player.v).fps }));
+    await page.keyboard.press('Space');
+    check(at4.fast && at4.fps === 15, 'playing at 4× shows the 15 frames a second copy', `${at4.fps} fps`);
   } else {
-    check(false, '6× made the fast copy');
+    check(false, 'opening made the fast copies');
   }
   await page.keyboard.press('1');
 
@@ -244,13 +256,19 @@ async function main() {
   await page.keyboard.press('Space');
   check(clicked.pass && Math.abs(clicked.t - 8.6) < 0.1 && tClick > 8.9 && tClick < clicked.pass.end, 'clicking in a cut plays that cut (not reviving it)', `from ${clicked.t.toFixed(2)} s to ${tClick.toFixed(2)} s`);
 
-  // preview still skips the cuts it runs into: playback jumps over the 8.15-9.99 s cut
-  await seek(page, 7.9);
+  // preview still skips the cuts it runs into: playback jumps over the 8.15-9.99 s cut, by switching to an element
+  // that already waits after the cut (a seek there would decode from the keyframe before it and freeze the picture)
+  await seek(page, 7.6);
+  const onScreen = await state(page, () => window.__flowcut.player.v.id);
   await page.keyboard.press('Space');
-  await page.waitForTimeout(1200);
+  await page.waitForFunction(() => [...window.__flowcut.player.cues.values()].some((c) => c.ready), null, { timeout: 3000 }).catch(() => {});
+  const parked = await state(page, () => [...window.__flowcut.player.cues.values()].map((c) => c.t));
+  await page.waitForTimeout(1400);
   await page.keyboard.press('Space');
   const tPlay = await now(page);
+  const nowOnScreen = await state(page, () => window.__flowcut.player.v.id);
   check(tPlay > 9.9, 'Preview result skips the cuts it runs into', `stopped at ${tPlay.toFixed(2)} s`);
+  check(parked.some((t) => Math.abs(t - 9.99) < 0.03) && nowOnScreen !== onScreen, '...by switching to an element already waiting after the cut', `parked at ${parked.map((t) => t.toFixed(2)).join(', ')} s, ${onScreen} -> ${nowOnScreen}`);
 
   // the timeline follows: the playhead walks to the middle and stays there; paused, the view slides freely
   await state(page, () => window.__flowcut.timeline.setView(0, 4));
@@ -349,13 +367,13 @@ async function main() {
   await big.page.keyboard.press('Space');
   await big.page.waitForTimeout(600);
   const fastSize = await big.page.evaluate(() => {
-    const f = document.querySelector('#videoFast');
+    const f = window.__flowcut.player.v;
     return { fast: window.__flowcut.player.showingFast, w: f.videoWidth, h: f.videoHeight };
   });
   await big.page.keyboard.press('Space');
-  await big.page.waitForFunction(() => !document.querySelector('#video').classList.contains('is-off'), null, { timeout: 3000 }).catch(() => {});
+  await big.page.waitForFunction(() => !window.__flowcut.player.showingFast && !window.__flowcut.player.v.classList.contains('is-off'), null, { timeout: 3000 }).catch(() => {});
   const mainSize = await big.page.evaluate(() => {
-    const m = document.querySelector('#video');
+    const m = window.__flowcut.player.v;
     return { w: m.videoWidth, h: m.videoHeight, badge: !document.querySelector('#stageBadge').hidden, shown: !m.classList.contains('is-off') };
   });
   check(fastSize.fast && fastSize.w === 3840 && fastSize.h === 2160, '4K at 4×: the fast copy has the original size', `${fastSize.w}x${fastSize.h}`);

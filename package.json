@@ -13,6 +13,7 @@
     "test": "node --test test/*.test.js",
     "e2e": "node test/e2e.js",
     "quality": "node test/quality.js",
+    "smooth": "node test/smooth.js",
     "postinstall": "node node_modules/electron/install.js"
   },
   "devDependencies": {

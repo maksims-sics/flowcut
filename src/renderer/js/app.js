@@ -197,7 +197,7 @@ async function openFile(file) {
   if (!file || S.busyJob) return;
   save.flush();                        // the last change of the current recording is written first
   player.pause();
-  if (S.fastJob) api.cancelJob(S.fastJob);   // that copy was for the recording being closed
+  if (S.fastJob) api.cancelJob(S.fastJob);   // those copies were for the recording being closed
   $('#busyTitle').textContent = 'Opening';
   $('#busyFile').textContent = basename(file);
   $('#busyStep').textContent = 'Starting';
@@ -219,8 +219,10 @@ async function loadProject(snap) {
   const levels = await api.levels(snap.id);
   timeline.setData({ duration: snap.info.duration, levels, shift: snap.analysis.shiftSeconds });
   player.load(snap.mediaUrl, snap.info.video?.fps || 30);
-  if (snap.fastUrl) player.setFast(snap.fastUrl);
+  if (snap.fastCopies) player.setFast(snap.fastCopies);
   setSpeed(1);
+  // the fast copies for 4x / 6x are made right away, in the background, so they are there when you speed up
+  if (snap.info.video && player.needsFast(4) && !snap.fastCopies) makeFast();
   $('#stageBadge').hidden = !snap.usingProxy;
   $('#stageMessage').hidden = true;
   history.reset({ edits: snap.edits, gainEdits: snap.gainEdits, splits: snap.splits });
@@ -334,12 +336,12 @@ function jumpCut(dir) {
 }
 
 // ---------------------------------------------------------------- playback
-/** 4x and 6x need the fast copy (the window decodes ~100 frames a second); it is made the first time they are used. */
+/** 4x and 6x need the fast copies (the window decodes ~100 frames a second); opening a recording starts them. */
 function setSpeed(rate) {
   if (!S.project) return;
   player.setRate(rate);
   for (const b of $('#speeds').querySelectorAll('button')) b.classList.toggle('is-on', Number(b.dataset.rate) === rate);
-  if (S.project.info.video && player.needsFast(rate) && !S.project.fastUrl) makeFast();
+  if (S.project.info.video && player.needsFast(rate) && !S.project.fastCopies) makeFast();
 }
 
 let flashTimer = 0;
@@ -549,7 +551,7 @@ async function makeFast() {
   try {
     await api.makeFast(S.project.id);
   } catch (err) {
-    toasts.error('Could not make the fast copy', err.message);
+    toasts.error('Could not make the fast copies', err.message);
   }
 }
 
@@ -659,9 +661,10 @@ function onFastJob(m) {
   if (m.type === 'start') {
     S.fastJob = m.id;
     S.fastToast = toasts.show({
-      title: 'Making the fast copy for 4× and 6×',
-      body: 'The editor window decodes about 100 frames a second, so the original freezes at 4× and 6×. This copy has '
-        + 'the same size and 10 frames a second; it is only on screen while playing fast. Until it is ready, 4× and 6× may stutter.',
+      title: 'Making the fast copies for 4× and 6×',
+      body: 'Once per recording, in the background: the same size, 15 frames a second for 4× and 10 for 6×, on screen '
+        + 'only while playing fast (the editor window cannot decode the original that fast). Until they are ready, '
+        + '4× and 6× may stutter.',
       progress: true,
       actions: [{ label: 'Cancel', onClick: () => api.cancelJob(m.id) }],
     });
@@ -672,8 +675,8 @@ function onFastJob(m) {
   S.fastToast?.close();
   if (m.type === 'done') {
     if (S.project?.id !== m.result.projectId) return;        // made for a recording that is no longer open
-    S.project.fastUrl = m.result.fastUrl;
-    player.setFast(m.result.fastUrl);
+    S.project.fastCopies = m.result.fastCopies;
+    player.setFast(m.result.fastCopies);
   } else if (m.type === 'error') {
     toasts.error('Fast copy failed', m.error);
   }
