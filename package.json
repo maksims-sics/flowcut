@@ -1,0 +1,22 @@
+{
+  "name": "flowcut",
+  "productName": "FlowCut",
+  "version": "0.1.0",
+  "description": "Desktop video editor that cuts silences and filler words from recordings for you to review, with a word timeline, smooth 6x review and one-pass renders",
+  "main": "src/main/main.js",
+  "private": true,
+  "author": "Maksims Sics",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "cut": "node src/cli.js",
+    "test": "node --test test/*.test.js",
+    "e2e": "node test/e2e.js",
+    "quality": "node test/quality.js",
+    "postinstall": "node node_modules/electron/install.js"
+  },
+  "devDependencies": {
+    "electron": "44.7.2",
+    "playwright-core": "1.64.1"
+  }
+}

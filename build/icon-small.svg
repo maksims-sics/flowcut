@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- FlowCut icon for 16-32 px: fewer, thicker shapes so it stays crisp -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1d6347"/>
+      <stop offset="1" stop-color="#0a2219"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="url(#tile)"/>
+  <g fill="#8ff0bc">
+    <rect x="5" y="12" width="3" height="8" rx="1.5"/>
+    <rect x="9.5" y="8" width="3" height="16" rx="1.5"/>
+    <rect x="19.5" y="9" width="3" height="14" rx="1.5"/>
+    <rect x="24" y="13" width="3" height="6" rx="1.5"/>
+  </g>
+  <rect x="15" y="6" width="2" height="20" rx="1" fill="#ff6f5e"/>
+</svg>

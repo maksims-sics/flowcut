@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' file: blob:">
+  <title>FlowCut</title>
+  <link rel="stylesheet" href="styles/app.css">
+</head>
+<body>
+  <header class="titlebar">
+    <div class="brand"><span data-logo="small"></span><span class="brand-name">FlowCut</span></div>
+    <div class="doc">
+      <span class="doc-name" id="docName"></span>
+      <span class="doc-stats" id="docStats"></span>
+    </div>
+    <div class="titlebar-actions">
+      <button class="btn btn-ghost" id="btnOpen" title="Open a recording (Ctrl+O)"><span data-icon="folder"></span>Open</button>
+      <button class="btn btn-primary" id="btnRender" title="Render the cut video (Ctrl+R)" disabled><span data-icon="render"></span>Render</button>
+    </div>
+  </header>
+
+  <main class="welcome" id="welcome">
+    <div class="welcome-card">
+      <div class="drop" id="drop">
+        <span data-logo></span>
+        <h1>Drop a recording here</h1>
+        <p>FlowCut marks every silence and filler word as a cut for you to review, then renders in one pass without visible quality loss.</p>
+        <button class="btn btn-primary btn-lg" id="btnOpenBig"><span data-icon="folder"></span>Open recording&hellip;</button>
+        <span class="hint"><kbd>Ctrl</kbd> <kbd>O</kbd></span>
+      </div>
+      <section class="recent" id="recentSection" hidden>
+        <h2>Recent</h2>
+        <ul id="recentList"></ul>
+      </section>
+      <footer class="tools-status" id="toolsStatus"></footer>
+    </div>
+  </main>
+
+  <main class="editor" id="editor" hidden>
+    <section class="viewer">
+      <div class="stage">
+        <video id="video" preload="auto"></video>
+        <video id="videoFast" preload="auto" class="is-off"></video>
+        <div class="stage-caption" id="caption" hidden></div>
+        <div class="stage-badge" id="stageBadge" hidden>Review copy</div>
+        <div class="stage-hint" id="stageHint" hidden></div>
+        <div class="stage-message" id="stageMessage" hidden>
+          <span id="stageText">This file can't play in the editor window.</span>
+          <button class="btn btn-xs" id="btnProxy">Make a review copy</button>
+        </div>
+      </div>
+      <div class="transport">
+        <div class="transport-left">
+          <button class="icon-btn" id="btnPrevCut" title="Previous cut (Up)"><span data-icon="prev"></span></button>
+          <button class="icon-btn icon-btn-lg" id="btnPlay" title="Play / pause (Space)"><span data-icon="play"></span></button>
+          <button class="icon-btn" id="btnNextCut" title="Next cut (Down)"><span data-icon="next"></span></button>
+          <div class="timecode"><span id="tcSource">00:00.00</span><span class="tc-sep">/</span><span id="tcDuration">00:00.00</span></div>
+          <div class="seg" id="speeds" role="group" aria-label="Playback speed">
+            <button data-rate="1" class="is-on" title="Normal speed (1)">1×</button>
+            <button data-rate="2" title="Double speed (2)">2×</button>
+            <button data-rate="4" title="4× (4)">4×</button>
+            <button data-rate="6" title="6× (6)">6×</button>
+          </div>
+        </div>
+        <div class="transport-right">
+          <div class="timecode muted" title="Position in the cut result"><span class="label">Result</span><span id="tcOutput">00:00.00</span><span class="tc-sep">/</span><span id="tcOutputTotal">00:00.00</span></div>
+          <label class="toggle" title="The spoken words on the video, like subtitles (C)"><input type="checkbox" id="captionsOn" checked><span class="toggle-track"></span><span>Words</span></label>
+          <label class="toggle" title="Play the result with the cuts skipped (P). Off: hear everything, including what is cut."><input type="checkbox" id="skipCuts" checked><span class="toggle-track"></span><span>Preview result</span></label>
+        </div>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <section class="card card-review">
+        <header class="card-head"><h3>Review</h3><span class="chip" id="editsChip">no edits</span></header>
+        <div class="tabs" role="tablist">
+          <button data-filter="all" class="is-on">All <b>0</b></button>
+          <button data-filter="filler">Fillers <b>0</b></button>
+          <button data-filter="silence">Pauses <b>0</b></button>
+          <button data-filter="edit">Yours <b>0</b></button>
+          <button data-filter="louder">Louder <b>0</b></button>
+        </div>
+        <ul class="review-list" id="reviewList"></ul>
+        <div class="btn-row">
+          <button class="btn btn-xs" id="btnUndo" title="Undo (Ctrl+Z)"><span data-icon="undo"></span>Undo</button>
+          <button class="btn btn-xs" id="btnRedo" title="Redo (Ctrl+Y)"><span data-icon="redo"></span>Redo</button>
+          <button class="btn btn-xs" id="btnHelp2" title="All keyboard shortcuts (?)"><span data-icon="help"></span>Keys</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <header class="card-head"><h3>Filler words</h3><span class="chip" id="transcriptChip">waiting</span></header>
+        <div class="status-line" id="fillerStatus"></div>
+        <div class="progress" id="transcribeBar" hidden><i></i></div>
+        <label class="check"><input type="checkbox" id="fillersOn" checked>Cut filler words automatically</label>
+        <details class="more">
+          <summary>Words to cut</summary>
+          <textarea class="text area" id="fillerList" rows="3" spellcheck="false" title="Comma-separated. Sounds like um and uh are always cut; words like so or actually only when they stand alone."></textarea>
+          <p class="help">Comma separated. Sounds (um, uh) are always cut; words (so, like, actually) only when they stand alone, so "it's so good" stays.</p>
+        </details>
+        <details class="more">
+          <summary>Transcription</summary>
+          <div class="field two">
+            <select class="select" id="lang" title="Spoken language">
+              <option value="en">English</option><option value="lv">Latvian</option><option value="ru">Russian</option><option value="auto">Detect</option>
+            </select>
+            <input class="text" id="vocab" placeholder="Names to spell right" title="Names and products Whisper should spell correctly">
+          </div>
+          <button class="btn btn-xs" id="btnTranscribe"><span data-icon="text"></span>Transcribe again</button>
+          <p class="help" id="whisperNote"></p>
+        </details>
+      </section>
+
+      <section class="card">
+        <header class="card-head"><h3>Render</h3><span class="chip" id="encoderChip"></span></header>
+        <div class="field two">
+          <select class="select" id="format" title="File type">
+            <option value="mp4">MP4 · AAC 320k</option><option value="mov">MOV · lossless audio</option>
+          </select>
+          <select class="select" id="quality" title="Picture quality">
+            <option value="best">Best quality</option><option value="smaller">Smaller file</option>
+          </select>
+        </div>
+        <p class="help" id="qualityNote"></p>
+        <div class="field">
+          <div class="field-row"><span>Save to</span><span><button class="link" id="btnOutDir">Change</button> <button class="link" id="btnOutDirReset" hidden>Reset</button></span></div>
+          <div class="path"><span id="outDir"></span></div>
+          <div class="outname" id="outName"></div>
+        </div>
+        <button class="btn btn-primary btn-block" id="btnRender2"><span data-icon="render"></span>Render</button>
+      </section>
+    </aside>
+
+    <section class="timeline-area">
+      <div class="timeline-bar">
+        <div class="legend">
+          <span><i class="key key-keep"></i>Kept</span>
+          <span><i class="key key-cut"></i>Pause</span>
+          <span><i class="key key-filler"></i>Filler</span>
+          <span><i class="key key-edit"></i>Yours</span>
+          <span><i class="key key-gain"></i>Louder</span>
+        </div>
+        <div class="bar-hint"><kbd>S</kbd> split · click a piece's bar to cut or keep it</div>
+        <div class="zoom">
+          <button class="icon-btn" id="btnZoomOut" title="Zoom out (-)"><span data-icon="zoomOut"></span></button>
+          <button class="icon-btn" id="btnZoomFit" title="Whole recording (0)"><span data-icon="fit"></span></button>
+          <button class="icon-btn" id="btnZoomIn" title="Zoom in (+)"><span data-icon="zoomIn"></span></button>
+          <button class="icon-btn" id="btnHelp" title="Keyboard shortcuts (?)"><span data-icon="help"></span></button>
+        </div>
+      </div>
+      <div class="timeline-wrap"><canvas id="timeline"></canvas></div>
+    </section>
+  </main>
+
+  <div class="overlay" id="busy" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="busyTitle">
+      <h2 id="busyTitle">Opening</h2>
+      <div class="file" id="busyFile"></div>
+      <div class="progress" id="busyBar"><i></i></div>
+      <div class="step"><span id="busyStep">Starting</span><span id="busyPct"></span></div>
+      <footer><button class="btn" id="busyCancel">Cancel</button></footer>
+    </div>
+  </div>
+
+  <div class="overlay" id="help" hidden>
+    <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+      <h2 id="helpTitle">Keyboard shortcuts</h2>
+      <dl class="help-grid" id="helpList"></dl>
+      <footer><button class="btn" id="helpClose">Close</button></footer>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
