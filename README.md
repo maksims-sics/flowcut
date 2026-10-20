@@ -1,4 +1,4 @@
-# FlowCut
+<h1><img src="src/renderer/assets/icon.png" alt="FlowCut icon" width="48" height="48" align="absmiddle">&nbsp;FlowCut</h1>
 
 A desktop editor for talking-head and screen recordings. Open a recording and FlowCut marks every pause and every
 filler word ("um", "uh", a stand-alone "so") as a cut for you to review. You go through it at up to 6× speed, fix what
@@ -30,8 +30,26 @@ Electron and plain JavaScript (no build step), Python only for the Whisper trans
 - [Node.js](https://nodejs.org) 20 or newer.
 - [ffmpeg](https://ffmpeg.org) and ffprobe on the PATH. An NVIDIA GPU makes renders and the fast copy much quicker
   (AV1 NVENC, used for the fast copy, needs an RTX 40-series card; other cards get H.264).
-- Optional, for the transcript and filler words: Python 3 with `pip install faster-whisper`. It uses the GPU when CUDA
-  works; the first transcription downloads the large-v3-turbo model (about 1.6 GB).
+- Optional: Python and Whisper for the transcript, filler words and words on the video (next section).
+
+### Transcript and filler words (optional)
+
+FlowCut runs Whisper on your own computer with [faster-whisper](https://github.com/SYSTRAN/faster-whisper): free, no
+account, no API key, nothing uploaded. Without it everything else (silence cuts, editing, review, render) still works.
+
+1. Install [Python](https://www.python.org/downloads/) 3.9 or newer and tick "Add python.exe to PATH" (FlowCut looks
+   for `python` or `py` on the PATH).
+2. Install faster-whisper:
+   ```
+   pip install faster-whisper
+   ```
+3. With an NVIDIA graphics card, also install its CUDA libraries, which make Whisper many times faster:
+   ```
+   pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"
+   ```
+   Without them Whisper runs on the CPU with a smaller model (slower, still free).
+4. Open a recording. The first transcription downloads the large-v3-turbo model once (about 1.6 GB, from Hugging Face);
+   after that it works offline. The welcome screen shows whether Whisper was found and whether it uses the GPU.
 
 ## Run it
 
